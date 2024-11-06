@@ -56,7 +56,10 @@ class CrossMapping:
             'raw_token_names_with_embeddings': os.path.join("Datasets", "ProcessedData",
                                                             "token_names_with_embedding.csv"),
             "token_names": os.path.join("TestingGarbage", "token_names.csv"),
-            "similarity_results_file_path": os.path.join("SimilarityResults", "similarity_results_version_0.1.csv")
+            "similarity_results_file_path": os.path.join("Datasets", "ProcessedData",
+                                                         "similarity_results_version.csv"),
+            "price_level_clustered_result_file_path": os.path.join('Datasets', 'ProcessedData',
+                                                                   'cluster_results_time_series.csv')
         }
 
     def read_price_data(self, path=None):
@@ -188,7 +191,13 @@ class CrossMapping:
         token_names_df.to_csv(save_path, index=False)
         logger.info("Embedding generation completed and saved.")
 
-    def process_pair(self, token1, token2, price_pivot_df, directory_names, results_file, smape_threshold):
+    def process_pair(self,
+                     token1,
+                     token2,
+                     price_pivot_df,
+                     directory_names,
+                     results_file,
+                     smape_threshold):
         logger.info(f"Processing Token1 : {token1} & Token2 : {token2}")
         try:
             token_folder_name = os.path.join(directory_names['visualization_data_dir_name'])
@@ -198,6 +207,7 @@ class CrossMapping:
 
             # Check if the plot already exists
             if os.path.exists(saving_file_path):
+                logger.info("Already exist ")
                 return
 
             # Drop missing values and find common indices
@@ -239,10 +249,14 @@ class CrossMapping:
                                   saving_file_path=saving_file_path)
 
                 # Save the results in a CSV file
-                with open(results_file, mode='a', newline='') as file:
-                    writer = csv.writer(file)
-                    # writer.writerow([token1, token2, dtw_distance, mae, rmse, mape, smape, cosine_sim])
-                    writer.writerow([token1, token2, dtw_distance, mae, rmse, mape, smape])
+            with open(results_file, mode='a', newline='') as file:
+                writer = csv.writer(file)
+                if token1 < token2:
+                    token_pair = (token1, token2)
+                else:
+                    token_pair = (token2, token1)
+
+                writer.writerow([token1, token2, dtw_distance, mae, rmse, mape, smape, token_pair])
 
             # Free memory if necessary
             del ts1_common, ts2_common, mae, rmse, mape, smape
@@ -264,10 +278,11 @@ class CrossMapping:
         if not os.path.exists(results_file):
             with open(results_file, mode='w', newline='') as file:
                 writer = csv.writer(file)
-                writer.writerow(['Token1', 'Token2', 'DTW_Distance', 'MAE', 'RMSE', 'MAPE', 'SMAPE', "cosine_sim"])
+                writer.writerow(
+                    ['Token1', 'Token2', 'DTW_Distance', 'MAE', 'RMSE', 'MAPE', 'SMAPE', "TokenPair"])
 
         # Iterate through each cluster
-        for cluster_id, cluster_group in results_with_cluster_id.groupby('cluster'):
+        for cluster_id, cluster_group in tqdm(results_with_cluster_id.groupby('cluster')):
             if skip_noise_cluster == True:
                 if cluster_id == -1:
                     continue
@@ -283,14 +298,24 @@ class CrossMapping:
                 for i, token1 in tqdm(enumerate(tokens), total=len(tokens), desc=f'Cluster {cluster_id}'):
                     for j, token2 in enumerate(tokens):
                         if i < j:  # Skip redundant calculations
-                            futures.append(
-                                executor.submit(self.process_pair,
-                                                token1,
-                                                token2,
-                                                price_pivot_df,
-                                                directory_names,
-                                                results_file,
-                                                smape_threshold))
+                            result_df = pd.read_csv(files_path['similarity_results_file_path'])
+
+                            token_pair = (token1, token2)
+                            if result_df['TokenPair'].isin([token_pair]).shape[0] > 0:
+
+                                df_row = result_df[result_df['TokenPair'] == token_pair]
+                                if (df_row['SMAPE'] < smape_threshold).all():
+                                    futures.append(
+                                        executor.submit(self.process_pair,
+                                                        token1,
+                                                        token2,
+                                                        price_pivot_df,
+                                                        directory_names,
+                                                        results_file,
+                                                        smape_threshold))
+                                else:
+                                    logger.info(f"Skipping Token Pair : {token_pair}")
+                                    continue
 
                 # Wait for all processes to complete
                 for future in tqdm(as_completed(futures), total=len(futures), desc="Processing Token Pairs"):
@@ -339,8 +364,8 @@ class CrossMapping:
         return df
 
     def __call__(self):
-        testing_on_testing_ids = False
-        TokenNameBaseClustring = True
+        testing_on_testing_ids = True
+        TokenNameBaseClustring = False
 
         ClusterParameters = {
             "TokenBaseClustring": {
@@ -354,7 +379,9 @@ class CrossMapping:
             "SimilarityParameter": {
                 "smape_threshold": 5,
             },
-            "max_worker": 5
+            "max_worker": 6,
+            "use_previous_cluster_data_price_level": True,
+            'visualization_of_price_cluster': False
         }
 
         logger.info('Reading Price data')
@@ -374,7 +401,7 @@ class CrossMapping:
             logger.info(f"Number of Testing ids: {len(testing_ids)}")
             filtered_raw_price_df = filtered_raw_price_df[filtered_raw_price_df['base_currency'].isin(testing_ids)]
 
-        filtered_raw_price_df[filtered_raw_price_df['base_currency']==15467].to_csv('testing_sample.csv',index=False)
+        filtered_raw_price_df[filtered_raw_price_df['base_currency'] == 15467].to_csv('testing_sample.csv', index=False)
         total_number_of_tokens = len(filtered_raw_price_df['base_currency'].unique())
         logger.info(f"total number of tokens: {total_number_of_tokens}")
 
@@ -392,7 +419,8 @@ class CrossMapping:
                                                            save_plots=False,
                                                            eps=ClusterParameters['TokenBaseClustring']['eps'],
                                                            min_cluster_size=ClusterParameters['TokenBaseClustring'][
-                                                               'min_samples']
+                                                               'min_samples'],
+
                                                            )
 
             total_cluster_base_on_token_name = len(list(token_names_df['TokenNameBaseClusterLabel'].unique()))
@@ -422,7 +450,8 @@ class CrossMapping:
                 logger.info("Performing DBSCAN on time series data...")
                 dbscan = DBSCAN(eps=ClusterParameters['PriceLevelClusterParameters']['eps'],
                                 min_samples=ClusterParameters['PriceLevelClusterParameters']['min_samples'],
-                                metric=smape_distance_metric)
+                                metric=smape_distance_metric,
+                                n_jobs=5)
                 labels = dbscan.fit_predict(price_pivot.T.values)
 
                 # Store clustering results
@@ -475,22 +504,29 @@ class CrossMapping:
             price_pivot = merged_df.pivot_table(index='timestamp_utc', columns='base_currency', values='open')
             price_pivot = price_pivot.fillna(method='ffill').fillna(method='bfill')
 
-            # Standardize the pivoted data
-            logger.info(f'Appling Scaling on price data')
-            scaler = StandardScaler()
-            price_scaled = scaler.fit_transform(price_pivot.T)
+            if ClusterParameters['use_previous_cluster_data_price_level']:
+                cluster_price_level_file_path = self.files_path['price_level_clustered_result_file_path']
+                logger.info("Loading the Price Cluster data file....")
+                cluster_results = pd.read_csv(cluster_price_level_file_path)
 
-            # Step 4: DBSCAN clustering on time series data
-            logger.info("Performing DBSCAN on time series data...")
-            dbscan = DBSCAN(eps=ClusterParameters['PriceLevelClusterParameters']['eps'],
-                            min_samples=ClusterParameters['PriceLevelClusterParameters']['min_samples'],
-                            metric=smape_distance_metric)
+            else:
+                # Standardize the pivoted data
+                logger.info(f'Appling Scaling on price data')
+                # scaler = StandardScaler()
+                # price_scaled = scaler.fit_transform(price_pivot.T)
 
-            labels = dbscan.fit_predict(price_pivot.T.values)
+                # Step 4: DBSCAN clustering on time series data
+                logger.info("Performing DBSCAN on time series data...")
+                dbscan = DBSCAN(eps=ClusterParameters['PriceLevelClusterParameters']['eps'],
+                                min_samples=ClusterParameters['PriceLevelClusterParameters']['min_samples'],
+                                metric=smape_distance_metric,
+                                n_jobs=2)
 
-            # Store clustering results
-            cluster_results = pd.DataFrame({'base_currency': price_pivot.columns, 'cluster': labels})
-            cluster_results.to_csv('cluster_results_time_series.csv', index=False)
+                labels = dbscan.fit_predict(price_pivot.T.values)
+                cluster_results = pd.DataFrame({'base_currency': price_pivot.columns, 'cluster': labels})
+
+                # Store clustering results
+                cluster_results.to_csv(self.files_path['price_level_clustered_result_file_path'], index=False)
 
             del raw_price_df
             del filtered_raw_price_df
@@ -498,17 +534,21 @@ class CrossMapping:
             del price_pivot
             gc.collect()
 
-            cluster_results = pd.read_csv('cluster_results_time_series.csv')
             logger.info(f"Created DataFrame for cluster results. Shape: {cluster_results.shape}")
 
             # Merge results with the original filtered DataFrame
             results_with_cluster_id = pd.merge(merged_df, cluster_results, on='base_currency')
+
+            del cluster_results
+            gc.collect()
+
             results_with_cluster_id['timestamp_utc'] = pd.to_datetime(results_with_cluster_id['timestamp_utc'])
             results_with_cluster_id = results_with_cluster_id.sort_values(by='timestamp_utc')
 
-            # Visualization (if needed)
-            cluster_visualization_of_time_series(results_with_cluster_id=results_with_cluster_id,
-                                                 cluster_dir_path=self.directory_names['cluster_dir_path'])
+            if ClusterParameters['visualization_of_price_cluster']:
+                # Visualization (if needed)
+                cluster_visualization_of_time_series(results_with_cluster_id=results_with_cluster_id,
+                                                     cluster_dir_path=self.directory_names['cluster_dir_path'])
 
             # Create pivot table from results with cluster IDs
             price_pivot_df = results_with_cluster_id.pivot_table(index='timestamp_utc', columns='base_currency',
