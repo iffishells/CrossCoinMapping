@@ -68,37 +68,42 @@ class PineconeStorage:
     def insert_data(self, index=None, data=None, inserted_ids=None, namespace_name=None, batch_size=8):
 
         for row_index, row in tqdm(data.iterrows(), total=len(data), desc="Inserting rows"):
-            logging.info(f"Inserting row: {row['display_name']}")
-            is_in_vector_db = self.is_record_in_vec_db(index=index, record_id=row["id"])
-            if is_in_vector_db == True:
-                print("Skipping embeddings")
-                continue
-            embedding_vector = get_embeddings(texts=row['display_name'])
+            try:
 
-            # Save embedding to JSON file
-            embedding_json = {
-                "id": str(row["id"]),
-                "embedding": embedding_vector[0]['embedding'],
-                "metadata": {
-                    "full_name": row['full_name'],
-                    "display_name": row['display_name'],
-                    "TokenID": row["id"]
+                logging.info(f"Inserting row: {row['display_name']}")
+                is_in_vector_db = self.is_record_in_vec_db(index=index, record_id=row["id"])
+                if is_in_vector_db == True:
+                    print("Skipping embeddings")
+                    continue
+                embedding_vector = get_embeddings(texts=row['display_name'])
+
+                # Save embedding to JSON file
+                embedding_json = {
+                    "id": str(row["id"]),
+                    "embedding": embedding_vector[0]['embedding'],
+                    "metadata": {
+                        "full_name": row['full_name'],
+                        "display_name": row['display_name'],
+                        "TokenID": row["id"]
+                    }
                 }
-            }
 
-            # Save the embedding to a JSON file (one per row)
-            with open(f"{self.save_embeddings_root_path}/{row['id']}_embedding.json", 'w') as f:
-                json.dump(embedding_json, f)
+                # Save the embedding to a JSON file (one per row)
+                with open(f"{self.save_embeddings_root_path}/{row['id']}_embedding.json", 'w') as f:
+                    json.dump(embedding_json, f)
 
-            # Upsert the vector into Pinecone
-            vector = {
-                "id": str(row["id"]),
-                "values": embedding_vector[0]['embedding'],
-                "metadata": embedding_json["metadata"]
-            }
+                # Upsert the vector into Pinecone
+                vector = {
+                    "id": str(row["id"]),
+                    "values": embedding_vector[0]['embedding'],
+                    "metadata": embedding_json["metadata"]
+                }
 
-            index.upsert(vectors=[vector], namespace="cross")
-            logging.info(f"Upserted vector with id '{row['display_name']}'")
+                index.upsert(vectors=[vector], namespace="cross")
+                logging.info(f"Upserted vector with id '{row['display_name']}'")
+            except Exception as e:
+                logging.error(e)
+                continue
 
     def delete_doc(self, index, doc_id, namespace_name):
         try:
