@@ -13,3 +13,4 @@ scipy==1.14.1
 seaborn==0.13.2
 python-dotenv==1.0.1
 wordcloud==1.9.3
+pinecone
