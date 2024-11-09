@@ -15,10 +15,11 @@ import os
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
+from App.adoptors.pinecone_client import PineconeStorage
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import ProcessPoolExecutor, as_completed
-
+from dotenv import dotenv_values
 config = dotenv_values(os.path.join('.env'))
 import requests
 
@@ -34,6 +35,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+embedding_root_path = os.path.join("Datasets","ProcessedData","Embeddings")
+os.makedirs(embedding_root_path,exist_ok=True)
 
 class CrossMapping:
     def __init__(self):
@@ -44,7 +47,8 @@ class CrossMapping:
             "testing_garbage_dir_name": "TestingGarbage",
             "ResultsDirectory": "SimilarityResults",
             "cluster_dir_path": "ClusterResultsVisualization",
-            "cluster_token_name_dir": "ClusterBaseOnTokenNameVisualization"
+            "cluster_token_name_dir": "ClusterBaseOnTokenNameVisualization",
+            "embedding_root_path": os.path.join("Datasets","ProcessedData","Embeddings")
         }
         for key, value in self.directory_names.items():
             logger.info(f"Creating Directories : {value}")
@@ -71,23 +75,7 @@ class CrossMapping:
         )
         return raw_price_df
 
-    def get_embeddings(self, texts):
-        headers = {
-            "Content-Type": "application/json",
-            "api-key": config['API_KEY']
-        }
-        data = {
-            "input": texts,
-            "model": "text-embedding-ada-002"  # Change as needed based on your deployment
-        }
 
-        response = requests.post(config['ENDPOINT'], headers=headers, json=data)
-
-        if response.status_code == 200:
-            return response.json()['data']
-        else:
-            print(f"Error: {response.status_code}, {response.text}")
-            return None
 
     def add_embedding_if_missing(self, row):
         # Check if embedding already exists
@@ -152,44 +140,6 @@ class CrossMapping:
         except Exception as e:
             print(f"Error processing '{display_name}': {e}")
             return index, None
-
-    def save_embedding(self, token_names_df=None, save_path='token_embeddings.csv', max_workers=2, batch_size=50):
-        # Initialize the 'embedding' column if it doesn't already exist
-        if 'embedding' not in token_names_df.columns:
-            token_names_df['embedding'] = None
-
-        total_tokens = token_names_df.shape[0]
-
-        # Use ThreadPoolExecutor for multithreading
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
-            for start in tqdm(range(0, total_tokens, batch_size), desc="Generating Embeddings"):
-                end = min(start + batch_size, total_tokens)
-                display_names = token_names_df['display_name'].iloc[start:end].tolist()
-                # Submit the task to the executor
-                futures.append(executor.submit(self.process_embedding_batch, display_names))
-
-                # Rate limiting
-                if len(futures) >= 2100:  # Limit based on API calls
-                    for future in tqdm(futures, desc="Waiting for results"):
-                        embeddings = future.result()
-                        for i, embedding in enumerate(embeddings):
-                            if embedding is not None:
-                                token_names_df.at[start + i, 'embedding'] = embedding
-                    futures.clear()  # Clear the completed futures
-
-                    # Sleep to respect rate limits
-                    time.sleep(30)  # Adjust as necessary based on your rate limits
-
-            # Collect any remaining results
-            for future in tqdm(futures, desc="Collecting Remaining Results"):
-                embeddings = future.result()
-                for i, embedding in enumerate(embeddings):
-                    if embedding is not None:
-                        token_names_df.at[start + i, 'embedding'] = embedding
-
-        token_names_df.to_csv(save_path, index=False)
-        logger.info("Embedding generation completed and saved.")
 
     def process_pair(self,
                      token1,
@@ -327,15 +277,15 @@ class CrossMapping:
         total_detected_similar_tokens = len(glob.glob(f"{directory_names['visualization_data_dir_name']}/*.png"))
         return total_detected_similar_tokens
 
-    def ClustringBaseOnTokenName(self, df=None,
-                                 max_features=1000,
-                                 min_df=1,
-                                 max_df=0.9,
-                                 cluster_col_name='TokenNameBaseClusterLabel',
-                                 save_plots=False,
-                                 eps=0.5,
-                                 min_cluster_size=2
-                                 ):
+    def ClustringBaseOnTokenNameTFIDF(self, df=None,
+                                      max_features=1000,
+                                      min_df=1,
+                                      max_df=0.9,
+                                      cluster_col_name='TokenNameBaseClusterLabel',
+                                      save_plots=False,
+                                      eps=0.5,
+                                      min_cluster_size=2
+                                      ):
 
         df.dropna(subset=['display_name'], inplace=True)  # Drop rows with NaN in 'display_name'
         df['display_name'] = df['display_name'].str.replace(r'[^a-zA-Z0-9]', '', regex=True).str.lower()
@@ -364,9 +314,9 @@ class CrossMapping:
         return df
 
     def __call__(self):
-        testing_on_testing_ids = True
+        testing_on_testing_ids = False
         TokenNameBaseClustring = False
-
+        upsortoperation = True
         ClusterParameters = {
             "TokenBaseClustring": {
                 "eps": 0.5,
@@ -411,6 +361,28 @@ class CrossMapping:
         logger.info('Filtering Token Data')
         token_names_df = self.filter_token_names(price_data=filtered_raw_price_df, token_data=token_names_df)
 
+
+        if upsortoperation==True:
+            pinecone_object = PineconeStorage(key=config['PINECONE_API_KEY'])
+            index_name = "cross-mapping"
+            # PineconeStorage_storage(index_name=index_name,data=filtered_raw_price_df)
+            pinecone_object.create_index(index_name=index_name)
+            index_object = pinecone_object.get_index(index_name)
+
+            # self.is_record_in_vec_db(index=index_object,record_id=803)
+
+            pinecone_object.insert_data(index=index_object,
+                       data = token_names_df)
+            return
+
+
+
+
+
+
+
+
+        token_names_df.to_csv(f"{self.directory_names['preprocessed_data_dir_name']}/token_names_filtered.csv", index=False)
         if TokenNameBaseClustring == True:
             logger.info(f"Current Parameters : {ClusterParameters}")
             logger.info('Token Name Base Clustering Started ...')
