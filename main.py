@@ -202,11 +202,12 @@ class CrossMapping:
             with open(results_file, mode='a', newline='') as file:
                 writer = csv.writer(file)
                 if token1 < token2:
-                    token_pair = (token1, token2)
+                    token_pair = (int(token1), int(token2))
                 else:
-                    token_pair = (token2, token1)
-
-                writer.writerow([token1, token2, dtw_distance, mae, rmse, mape, smape, token_pair])
+                    token_pair = (int(token2), int(token1))
+                logger.info(f"saving results... of token pair : {token_pair} in file  : {results_file}")
+                # writer.writerow([token1, token2, dtw_distance, mae, rmse, mape, smape, token_pair])
+                writer.writerow([token1, token2, dtw_distance, mae, rmse, mape, smape, token_pair ])
 
             # Free memory if necessary
             del ts1_common, ts2_common, mae, rmse, mape, smape
@@ -224,6 +225,7 @@ class CrossMapping:
                                                    max_workers=2,
                                                    skip_noise_cluster=True,
                                                    smape_threshold=5):
+        logger.info(f"CoinCrossMappingSimilarity_multiprocessing called ")
         results_file = files_path['similarity_results_file_path']
         if not os.path.exists(results_file):
             with open(results_file, mode='w', newline='') as file:
@@ -235,6 +237,7 @@ class CrossMapping:
         for cluster_id, cluster_group in tqdm(results_with_cluster_id.groupby('cluster')):
             if skip_noise_cluster == True:
                 if cluster_id == -1:
+                    logger.info("Skipping cluster noise")
                     continue
 
             logger.info(f"Processing Cluster ID: {cluster_id}")
@@ -250,11 +253,22 @@ class CrossMapping:
                         if i < j:  # Skip redundant calculations
                             result_df = pd.read_csv(files_path['similarity_results_file_path'])
 
-                            token_pair = (token1, token2)
-                            if result_df['TokenPair'].isin([token_pair]).shape[0] > 0:
+                            if token1 < token2:
+                                token_pair = (int(token1), int(token2))
+                            else:
+                                token_pair = (int(token2), int(token1))
 
-                                df_row = result_df[result_df['TokenPair'] == token_pair]
+                            logger.info(f"token pair : {token_pair}")
+                            # exists = result_df['TokenPair'].isin([token_pair]).any()
+                            exists = result_df[(result_df['Token1'] == int(token1)) & (result_df['Token2'] == int(token2))].shape[0]>0
+                            logger.info(f"exists status: {exists}")
+                            if exists:
+                                logger.info("Already exist")
+                                # df_row = result_df[result_df['TokenPair'] == token_pair]
+                                df_row = result_df[(result_df['Token1'] == int(token1)) & (result_df['Token2'] == int(token2))]
+                                logger.info(f"df_row : {df_row}")
                                 if (df_row['SMAPE'] < smape_threshold).all():
+                                    logger.info(f"SMAPE is less than {smape_threshold}")
                                     futures.append(
                                         executor.submit(self.process_pair,
                                                         token1,
@@ -266,6 +280,16 @@ class CrossMapping:
                                 else:
                                     logger.info(f"Skipping Token Pair : {token_pair}")
                                     continue
+                            else:
+                                logger.info(f"adding new token pair : {token_pair}")
+                                futures.append(
+                                        executor.submit(self.process_pair,
+                                                        token1,
+                                                        token2,
+                                                        price_pivot_df,
+                                                        directory_names,
+                                                        results_file,
+                                                        smape_threshold))
 
                 # Wait for all processes to complete
                 for future in tqdm(as_completed(futures), total=len(futures), desc="Processing Token Pairs"):
@@ -314,7 +338,7 @@ class CrossMapping:
         return df
 
     def __call__(self):
-        testing_on_testing_ids = False
+        testing_on_testing_ids = True
         TokenNameBaseClustring = False
         upsortoperation = False
         ClusterParameters = {
