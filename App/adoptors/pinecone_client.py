@@ -156,7 +156,7 @@ class PineconeStorage:
                     namespace=namespace,
                     filter=query_filter
                 )
-                return {'matches': response['matches']}
+                return [ meta_dict['id'] for meta_dict in  response['matches']]
 
             except Exception as e:
                 logging.error(f"Error querying Pinecone: {e}")
