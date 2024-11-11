@@ -391,8 +391,7 @@ class CrossMapping:
 
         if upsortoperation==True:
             pinecone_object = PineconeStorage(key=config['PINECONE_API_KEY'],
-                                              save_embeddings_root_path=self.directory_names['embedding_root_path']
-)
+                                              save_embeddings_root_path=self.directory_names['embedding_root_path'])
             index_name = "cross-mapping"
             # PineconeStorage_storage(index_name=index_name,data=filtered_raw_price_df)
             pinecone_object.create_index(index_name=index_name)
